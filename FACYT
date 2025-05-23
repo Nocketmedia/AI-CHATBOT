@@ -1,0 +1,234 @@
+<!-- chat-widget.html -->
+<link rel="stylesheet" href="chat-widget.css">
+
+<script>
+(function() {
+  if (window.N8nChatWidgetLoaded) return;
+  window.N8nChatWidgetLoaded = true;
+
+  // === Configuración de textos para localización ===
+  const I18N = {
+    launcherText: '¿Necesitas ayuda?',
+    startChatBtn: 'Comenzá a asesorarte',
+    registrationTitle: 'Por favor ingresa tus datos para comenzar',
+    nameLabel: 'Nombre',
+    namePlaceholder: 'Tu nombre',
+    emailLabel: 'Email',
+    emailPlaceholder: 'Tu correo electrónico',
+    continueBtn: 'Continuar al chat',
+    poweredByText: 'Powered by n8n'
+  };
+
+  // === Inserción de fuente Poppins ===
+  const fontLink = document.createElement('link');
+  fontLink.rel = 'stylesheet';
+  fontLink.href = 'https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap';
+  document.head.appendChild(fontLink);
+
+  // === Variables de configuración por defecto ===
+  const defaults = {
+    webhookUrl: window.ChatWidgetConfig?.webhook?.url || '',
+    webhookRoute: window.ChatWidgetConfig?.webhook?.route || '',
+    logo: window.ChatWidgetConfig?.branding?.logo || '',
+    name: window.ChatWidgetConfig?.branding?.name || '',
+    welcomeText: window.ChatWidgetConfig?.branding?.welcomeText || '',
+    responseTimeText: window.ChatWidgetConfig?.branding?.responseTimeText || '',
+    poweredByLink: window.ChatWidgetConfig?.branding?.poweredBy?.link || '',
+    style: {
+      primary: window.ChatWidgetConfig?.style?.primaryColor || '#10b981',
+      secondary: window.ChatWidgetConfig?.style?.secondaryColor || '#059669',
+      background: window.ChatWidgetConfig?.style?.backgroundColor || '#ffffff',
+      fontColor: window.ChatWidgetConfig?.style?.fontColor || '#1f2937',
+      position: window.ChatWidgetConfig?.style?.position || 'right'
+    },
+    suggestedQuestions: window.ChatWidgetConfig?.suggestedQuestions || []
+  };
+
+  // === Creación del DOM del widget ===
+  const widgetRoot = document.createElement('div');
+  widgetRoot.className = 'chat-assist-widget';
+  widgetRoot.style.setProperty('--chat-widget-primary', defaults.style.primary);
+  widgetRoot.style.setProperty('--chat-widget-secondary', defaults.style.secondary);
+  widgetRoot.style.setProperty('--chat-widget-surface', defaults.style.background);
+  widgetRoot.style.setProperty('--chat-widget-text', defaults.style.fontColor);
+
+  // Plantilla HTML del chat
+  widgetRoot.innerHTML = `
+    <div class="chat-window ${defaults.style.position}-side">
+      <div class="chat-header">
+        <img class="chat-header-logo" src="${defaults.logo}" alt="${defaults.name}">
+        <span class="chat-header-title">${defaults.name}</span>
+        <button class="chat-close-btn">×</button>
+      </div>
+      <div class="chat-welcome">
+        <h2 class="chat-welcome-title">${defaults.welcomeText}</h2>
+        <button class="chat-start-btn">${I18N.startChatBtn}</button>
+        <p class="chat-response-time">${defaults.responseTimeText}</p>
+      </div>
+      <div class="user-registration">
+        <h2 class="registration-title">${I18N.registrationTitle}</h2>
+        <form class="registration-form">
+          <div class="form-field">
+            <label class="form-label" for="chat-user-name">${I18N.nameLabel}</label>
+            <input type="text" id="chat-user-name" class="form-input" placeholder="${I18N.namePlaceholder}" required>
+            <div class="error-text" id="name-error"></div>
+          </div>
+          <div class="form-field">
+            <label class="form-label" for="chat-user-email">${I18N.emailLabel}</label>
+            <input type="email" id="chat-user-email" class="form-input" placeholder="${I18N.emailPlaceholder}" required>
+            <div class="error-text" id="email-error"></div>
+          </div>
+          <button type="submit" class="submit-registration">${I18N.continueBtn}</button>
+        </form>
+      </div>
+      <div class="chat-body">
+        <div class="chat-messages"></div>
+        <div class="chat-controls">
+          <textarea class="chat-textarea" placeholder="Escribí tu mensaje..." rows="1"></textarea>
+          <button class="chat-submit">
+            <!-- Icono de enviar -->
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M22 2L11 13"></path>
+              <path d="M22 2l-7 20-4-9-9-4 20-7z"></path>
+            </svg>
+          </button>
+        </div>
+        <div class="chat-footer">
+          <a class="chat-footer-link" href="${defaults.poweredByLink}" target="_blank">${I18N.poweredByText}</a>
+        </div>
+      </div>
+    </div>
+    <button class="chat-launcher ${defaults.style.position}-side">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8..."></path>
+      </svg>
+      <span class="chat-launcher-text">${I18N.launcherText}</span>
+    </button>
+  `;
+
+  document.body.appendChild(widgetRoot);
+
+  // === Lógica de interacción y envío de mensajes ===
+  const chatWindow = widgetRoot.querySelector('.chat-window');
+  const launcher = widgetRoot.querySelector('.chat-launcher');
+  const startBtn = widgetRoot.querySelector('.chat-start-btn');
+  const closeBtn = widgetRoot.querySelector('.chat-close-btn');
+  const registrationForm = widgetRoot.querySelector('.registration-form');
+  const welcome = widgetRoot.querySelector('.chat-welcome');
+  const registration = widgetRoot.querySelector('.user-registration');
+  const chatBody = widgetRoot.querySelector('.chat-body');
+  const messages = widgetRoot.querySelector('.chat-messages');
+  const textarea = widgetRoot.querySelector('.chat-textarea');
+  const sendBtn = widgetRoot.querySelector('.chat-submit');
+
+  let sessionId = '';
+  let waiting = false;
+
+  const createSessionId = () => crypto.randomUUID();
+  const linkify = text => text.replace(/(\bhttps?:\/\/[^\s]+)/gi, url => `<a href="${url}" target="_blank">${url}</a>`);
+
+  const showRegistration = () => {
+    welcome.style.display = 'none';
+    registration.classList.add('active');
+  };
+
+  const validateEmail = email => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+
+  const submitRegistration = async e => {
+    e.preventDefault();
+    // Validaciones...
+    const name = widgetRoot.querySelector('#chat-user-name').value.trim();
+    const email = widgetRoot.querySelector('#chat-user-email').value.trim();
+    // Reset errores...
+    let valid = true;
+    if (!name) { /* mostrar error */ valid = false; }
+    if (!email || !validateEmail(email)) { /* mostrar error */ valid = false; }
+    if (!valid) return;
+
+    sessionId = createSessionId();
+    registration.classList.remove('active');
+    chatBody.classList.add('active');
+
+    // Cargar sesión e iniciar conversación
+    try {
+      const loadRes = await fetch(defaults.webhookUrl, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify([{ action: "loadPreviousSession", sessionId, route: defaults.webhookRoute, metadata:{userId:email,userName:name} }])
+      });
+      const loadData = await loadRes.json();
+
+      // Primer mensaje de bienvenida del bot
+      const botMsg = document.createElement('div');
+      botMsg.className = 'chat-bubble bot-bubble';
+      botMsg.innerHTML = linkify(Array.isArray(loadData)? loadData[0].output : loadData.output);
+      messages.appendChild(botMsg);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const sendMessage = async text => {
+    if (waiting) return;
+    waiting = true;
+    // Mostrar mensaje del usuario
+    const userMsg = document.createElement('div');
+    userMsg.className = 'chat-bubble user-bubble';
+    userMsg.textContent = text;
+    messages.appendChild(userMsg);
+
+    // Indicador de escritura...
+    const typing = document.createElement('div');
+    typing.className = 'typing-indicator';
+    typing.innerHTML = '<div class="typing-dot"></div>'.repeat(3);
+    messages.appendChild(typing);
+    messages.scrollTop = messages.scrollHeight;
+
+    // Envío al webhook
+    try {
+      const res = await fetch(defaults.webhookUrl, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ action:"sendMessage", sessionId, route:defaults.webhookRoute, chatInput:text })
+      });
+      const data = await res.json();
+      messages.removeChild(typing);
+
+      const botMsg = document.createElement('div');
+      botMsg.className = 'chat-bubble bot-bubble';
+      botMsg.innerHTML = linkify(Array.isArray(data)? data[0].output : data.output);
+      messages.appendChild(botMsg);
+      messages.scrollTop = messages.scrollHeight;
+    } catch (err) {
+      console.error(err);
+    } finally {
+      waiting = false;
+    }
+  };
+
+  // Auto-resize del textarea
+  const resize = () => {
+    textarea.style.height = 'auto';
+    textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
+  };
+
+  // === Event Listeners ===
+  launcher.addEventListener('click', () => chatWindow.classList.toggle('visible'));
+  closeBtn.addEventListener('click', () => chatWindow.classList.remove('visible'));
+  startBtn.addEventListener('click', showRegistration);
+  registrationForm.addEventListener('submit', submitRegistration);
+
+  sendBtn.addEventListener('click', () => {
+    const txt = textarea.value.trim();
+    if (txt) { sendMessage(txt); textarea.value = ''; resize(); }
+  });
+  textarea.addEventListener('input', resize);
+  textarea.addEventListener('keypress', e => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendBtn.click();
+    }
+  });
+
+})();
+</script>
